@@ -1,0 +1,4 @@
+menu "Zybo Z7 packages"
+source "$BR2_EXTERNAL_ZYBO_PATH/package/zybo-btn/Config.in"
+source "$BR2_EXTERNAL_ZYBO_PATH/package/zybo-monitor/Config.in"
+endmenu

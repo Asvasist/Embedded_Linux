@@ -1,0 +1,2 @@
+# options for /usr/sbin/zybo-monitor, see zybo-monitor -h
+ZYBO_MONITOR_ARGS="-i 60 -w 70"

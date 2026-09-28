@@ -1,0 +1,36 @@
+#!/bin/sh
+#
+# Program the PL through the fpga_manager if a bitstream was installed.
+# The file must be a .bin (bootgen -process_bitstream bin), not a .bit.
+#
+
+BITSTREAM="zybo_top.bit.bin"
+MGR="/sys/class/fpga_manager/fpga0"
+
+start() {
+	[ -f "/lib/firmware/$BITSTREAM" ] || return 0
+
+	printf 'Loading PL bitstream %s: ' "$BITSTREAM"
+	if [ ! -d "$MGR" ]; then
+		echo "FAIL (no fpga_manager)"
+		return 1
+	fi
+	# flags=0: full bitstream
+	echo 0 > "$MGR/flags"
+	if echo "$BITSTREAM" > "$MGR/firmware"; then
+		echo "OK ($(cat "$MGR/state"))"
+	else
+		echo "FAIL"
+		return 1
+	fi
+}
+
+case "$1" in
+	start)
+		start;;
+	stop|restart|reload)
+		;;
+	*)
+		echo "Usage: $0 {start|stop|restart|reload}"
+		exit 1
+esac

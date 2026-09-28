@@ -1,0 +1,22 @@
+// SPDX-License-Identifier: GPL-2.0
+/*
+ * Zybo Z7 board DT: upstream board file plus the button driver node.
+ *
+ * Buildroot copies this file into the kernel dts directory. With the
+ * xlnx 6.1 kernel that is arch/arm/boot/dts/; on >= 6.5 kernels the
+ * include has to become "xilinx/zynq-zybo-z7.dts".
+ */
+/dts-v1/;
+#include "zynq-zybo-z7.dts"
+
+/ {
+	model = "Digilent Zybo Z7 (buildroot)";
+
+	/* BTN4/BTN5 sit on MIO50/51, active high with external pull-downs */
+	buttons {
+		compatible = "asv,zybo-btn";
+		button-gpios = <&gpio0 50 GPIO_ACTIVE_HIGH>,
+			       <&gpio0 51 GPIO_ACTIVE_HIGH>;
+		debounce-interval = <20>;
+	};
+};
