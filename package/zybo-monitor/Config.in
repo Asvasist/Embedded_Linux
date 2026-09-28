@@ -1,0 +1,10 @@
+config BR2_PACKAGE_ZYBO_MONITOR
+	bool "zybo-monitor"
+	depends on BR2_LINUX_KERNEL
+	select BR2_PACKAGE_ZYBO_BTN
+	help
+	  Small daemon: button handling, LD4 control and XADC
+	  temperature monitoring. Started from /etc/init.d.
+
+comment "zybo-monitor needs a Linux kernel to be built"
+	depends on !BR2_LINUX_KERNEL
