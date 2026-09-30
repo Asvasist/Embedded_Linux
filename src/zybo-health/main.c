@@ -51,8 +51,10 @@ static void temperature(void)
             f = fopen(path, "r");
             if (!f)
                 continue;
-            name[0] = 0;
-            (void)fscanf(f, "%31s", name);
+            if (fscanf(f, "%31s", name) != 1) {
+                fclose(f);
+                continue;
+            }
             fclose(f);
             if (strcmp(name, "xadc"))
                 continue;
