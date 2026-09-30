@@ -1,0 +1,17 @@
+config BR2_PACKAGE_ZYBO_HEALTH
+	bool "zybo-health"
+	depends on BR2_LINUX_KERNEL
+	select BR2_PACKAGE_ZYBO_BTN
+	help
+	  Bounded power-on checks and an application startup gate for Zybo Z7.
+
+config BR2_PACKAGE_ZYBO_SECURE_BOOT
+	bool "Zybo authenticated boot image packaging"
+	depends on BR2_LINUX_KERNEL && BR2_TARGET_UBOOT && BR2_TARGET_ROOTFS_CPIO
+	select BR2_PACKAGE_ZYBO_HEALTH
+	select BR2_PACKAGE_HOST_PYTHON3
+	select BR2_PACKAGE_HOST_DTC
+	select BR2_PACKAGE_HOST_BOOTGEN
+	help
+	  Use with zybo_z7_secure_defconfig. Requires private signing keys,
+	  an RSA-capable Zybo Z7-20 FSBL and the AMD Bootgen host tool.

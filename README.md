@@ -1,190 +1,321 @@
 # Embedded Linux on the Zybo Z7
 
-Buildroot based Linux for the Digilent Zybo Z7 (Zynq-7010/7020), with a small
-kernel driver and a userspace daemon on top. The PL is not needed for any of
-this, everything runs on the PS side (MIO buttons, MIO LED, XADC). A bitstream
-can still be loaded from Linux if you have one.
+A Buildroot external tree for the **Digilent Zybo Z7-20**, combining a custom
+button driver, board monitoring, automatic startup diagnostics, and an
+authenticated boot build profile.
 
-What's in here:
+The monitoring application runs on the Zynq processing system (PS): it uses
+MIO buttons, the MIO LED, and the on-chip XADC. A programmable-logic (PL)
+bitstream is optional.
 
-- Buildroot external tree (`BR2_EXTERNAL`) with a defconfig for the board
-- U-Boot SPL -> U-Boot -> Linux boot from SD card (extlinux, no FSBL/Vivado needed)
-- `zybo_btn` kernel module: platform driver for BTN4/BTN5, IRQ + debounce,
-  events on a misc char device, sysfs attributes
-- `zybo-monitor` daemon: reads button events, drives LD4 through the LED
-  class, reads the die temperature from the XADC (IIO)
-- Init scripts, kernel config fragment, DT, genimage SD card layout
+> **Project status:** source implementation with host regression tests.
+> A complete secure image still requires a board-specific FSBL generated from
+> your XSA. Full Buildroot builds, cryptographic integration tests and board
+> acceptance tests must pass before deployment. Hardware secure boot is not
+> enabled by generating signed files; eFUSE provisioning is a separate step.
 
-## Layout
+## Capabilities
 
+| Component | Function |
+|---|---|
+| Buildroot integration | Builds the Linux image, custom packages and SD-card layout |
+| `zybo_btn` kernel module | Interrupt-driven, debounced BTN4/BTN5 events through `/dev/zybo_btn` |
+| `zybo-health` | Startup checks for memory, required device interfaces and XADC temperature |
+| `zybo-monitor` | Button actions, LED control, temperature alerts and system status logging |
+| Authenticated boot profile | RSA-signed FSBL/U-Boot and signed FIT configuration covering Linux, DT and initial filesystem |
+| Recovery policy | Tries a signed recovery FIT when the primary image fails before kernel handoff |
+| Validation | Portable policy/C tests, Linux daemon tests and FIT tampering tests |
+
+The event queue and startup memory tests have fixed bounds. **Per-service
+memory limits, a runtime supervisor and watchdog recovery are not implemented.**
+They remain possible extensions.
+
+## Build profiles
+
+| | Development | Authenticated boot |
+|---|---|---|
+| Defconfig | `zybo_z7_defconfig` | `zybo_z7_secure_defconfig` |
+| First-stage loader | U-Boot SPL | Board-specific AMD FSBL with `RSA_SUPPORT` |
+| Linux boot | extlinux, `zImage`, DTB | Signed `system.itb` |
+| Root filesystem | Writable SD ext4 partition | Complete signed initramfs, unpacked into RAM |
+| Startup diagnostics | Enabled | Enabled |
+| Login | `root` / `zybo`; Dropbear enabled | Root login disabled; no Dropbear |
+| Additional inputs | None | FSBL ELF and private signing keys |
+| Hardware trust anchor | None | Requires separately validated eFUSE provisioning |
+
+Use the development credentials only on an isolated development network and
+change them before enabling access from other systems. The authenticated
+profile prints UART diagnostics; enabling an interactive developer login is
+an explicit Buildroot configuration change.
+
+## Boot architecture
+
+```text
+Development:
+Boot ROM -> U-Boot SPL -> U-Boot/extlinux -> Linux + SD rootfs
+
+Authenticated profile:
+Boot ROM -> authenticated FSBL -> authenticated U-Boot
+                                       |
+                            DDR quick test + SD access
+                                       |
+                            verify signed system.itb
+                              |                 |
+                            valid            rejected
+                              |                 |
+                              |        verify signed recovery.itb
+                              |          |                |
+                              |        valid           rejected -> stop
+                              v          v
+                          Linux -> /init -> BusyBox init
+                                       |
+                           S15: required health checks
+                                       |
+                           S20: optional FPGA programming
+                                       |
+                           S90: start board monitor
 ```
-configs/zybo_z7_defconfig        Buildroot defconfig
-board/zybo-z7/
-    zybo-z7.dts                  upstream board DT + button node
-    linux.fragment               kernel config additions
-    extlinux.conf                boot entry read by U-Boot distro boot
-    genimage.cfg, post-image.sh  sdcard.img generation
-    rootfs-overlay/              /etc/default, S20fpga init script
-package/zybo-btn/                Buildroot package for the kernel module
-package/zybo-monitor/            Buildroot package for the daemon + init script
-src/zybo-btn/                    kernel module sources
-src/zybo-monitor/                daemon sources
+
+The authenticated U-Boot path does not load an external boot script, saved
+environment or extlinux configuration, and does not expose an interactive
+U-Boot prompt after failure. Linux enters Buildroot's `/init` wrapper so that
+`devtmpfs` is mounted before `/sbin/init` starts.
+
+See [the secure-boot guide](docs/secure-boot.md) for signing, the trust chain,
+memory layout, recovery boundaries and hardware provisioning prerequisites.
+
+## Repository layout
+
+```text
+configs/                     Development and authenticated Buildroot profiles
+board/zybo-z7/               Device tree, kernel fragment and SD-image scripts
+board/zybo-z7/rootfs-overlay/ Board startup scripts and monitor defaults
+board/zybo-z7/secure/         U-Boot policy, patch, configuration and packaging
+package/                     Buildroot package definitions and init scripts
+src/zybo-btn/                Linux platform driver and shared event ABI
+src/zybo-health/             Startup diagnostics in userspace C
+src/zybo-monitor/            Event-driven board daemon in userspace C
+tools/secure_boot.py          Signing, verification and artifact packaging
+tests/                       C, policy and integration regression tests
+docs/secure-boot.md           Detailed authenticated-boot setup
+.github/workflows/            Linux CI configuration
 ```
 
-## Versions
+All build commands use this repository's root as `BR2_EXTERNAL`.
 
-| Component | Version |
-|-----------|---------|
-| Buildroot | 2024.02.x (LTS) |
-| Linux     | linux-xlnx `xilinx-v2023.2` (6.1) |
-| U-Boot    | u-boot-xlnx `xilinx-v2023.2` |
+## Prerequisites
 
-## Build
+- Digilent Zybo Z7-20, microSD card, USB UART connection and suitable power.
+- A Linux build host with the
+  [Buildroot prerequisites](https://buildroot.org/downloads/manual/manual.html#requirement).
+  Native Windows/MSYS is suitable for portable tests, not a full Buildroot build.
+- For signing: Python 3.11+, OpenSSL and an FSBL matching the board's hardware
+  export. Buildroot supplies DTC, Bootgen and U-Boot signing tools.
 
-Buildroot needs the usual host packages (see the Buildroot manual,
-"System requirements").
+| Dependency | Pinned version |
+|---|---|
+| Buildroot | `2024.02.9` |
+| Linux | Xilinx `xilinx-v2023.2`, 6.1 series |
+| U-Boot | Xilinx `xilinx-v2023.2` |
+
+These versions are retained for project compatibility, not presented as a
+current production-security baseline. Review upstream fixes before deployment.
+The original Zybo and other board variants have not been validated by this
+extension.
+
+## Build the development image
+
+Run from this repository on Linux. Keep separate output directories for the
+two profiles.
 
 ```sh
-git clone https://gitlab.com/buildroot.org/buildroot.git -b 2024.02.9
-git clone https://github.com/Asvasist/Embedded_Linux.git
+export PROJECT_DIR="$(pwd)"
+git clone --depth 1 --branch 2024.02.9 \
+    https://gitlab.com/buildroot.org/buildroot.git ../buildroot
 
-cd buildroot
-make BR2_EXTERNAL=../Embedded_Linux O=../out zybo_z7_defconfig
-cd ../out
-make
+make -C ../buildroot BR2_EXTERNAL="$PROJECT_DIR" \
+    O="$PROJECT_DIR/../out-dev" zybo_z7_defconfig
+make -C ../out-dev
 ```
 
-First build takes a while (toolchain, kernel, U-Boot). Output ends up in
-`out/images/`:
+The output directory contains `images/sdcard.img`, `boot.bin`, `u-boot.img`,
+`zImage`, `zybo-z7.dtb` and `rootfs.ext4`.
 
-```
-boot.bin        U-Boot SPL (with ps7_init for the Zybo Z7)
-u-boot.img
-zImage
-zybo-z7.dtb
-rootfs.ext4
-sdcard.img      everything above in a 2 partition image
-```
-
-Rebuilding only the project packages after a change:
+To rebuild project packages and regenerate the image:
 
 ```sh
-make zybo-btn-rebuild zybo-monitor-rebuild
-make            # regenerate the images
+make -C ../out-dev zybo-btn-rebuild zybo-health-rebuild zybo-monitor-rebuild
+make -C ../out-dev
 ```
 
-## Flash and boot
+## Build the authenticated image
+
+First generate the Zybo Z7-20 XSA and build an FSBL with `RSA_SUPPORT` using
+Vivado/Vitis. Preserve the ELF symbols. Detailed requirements are in the
+[FSBL and signing instructions](docs/secure-boot.md#inputs-needed-after-creating-the-xsa).
+
+Create signing keys outside the repository, then configure the secure build:
 
 ```sh
-sudo dd if=images/sdcard.img of=/dev/sdX bs=4M conv=fsync
+export PROJECT_DIR="$(pwd)"
+python3 tools/secure_boot.py keygen --directory "$HOME/zybo-signing"
+
+export ZYBO_SIGNING_DIR="$HOME/zybo-signing"
+export ZYBO_FSBL="/absolute/path/to/zybo-z7-20/fsbl.elf"
+
+make -C ../buildroot BR2_EXTERNAL="$PROJECT_DIR" \
+    O="$PROJECT_DIR/../out-secure" zybo_z7_secure_defconfig
+make -C ../out-secure
 ```
 
-- Set JP5 to SD
-- Serial console on the PROG/UART micro USB, 115200 8N1 (`/dev/ttyUSB1` usually)
-- Login `root` / `zybo`
-- eth0 comes up with DHCP, dropbear is running for ssh
+Without the FSBL, you can prepare the software components first:
 
-## zybo_btn driver
-
-DT node (in `board/zybo-z7/zybo-z7.dts`):
-
-```dts
-buttons {
-    compatible = "asv,zybo-btn";
-    button-gpios = <&gpio0 50 GPIO_ACTIVE_HIGH>,   /* BTN4 */
-                   <&gpio0 51 GPIO_ACTIVE_HIGH>;   /* BTN5 */
-    debounce-interval = <20>;
-};
+```sh
+make -C ../out-secure linux uboot zybo-btn zybo-health zybo-monitor
 ```
 
-Both edges of each GPIO trigger an interrupt. The ISR only (re)arms a delayed
-work, the work reads the level once it has been stable for `debounce_ms` and
-pushes an event into a kfifo. Readers block on a wait queue or use poll().
+Final packaging deliberately fails if required inputs, resolved kernel/U-Boot
+settings or image verification checks are invalid. Failed packaging removes
+stale deployable outputs. Private keys are not included on the SD card.
 
-`read()` on `/dev/zybo_btn` returns one or more of these (see
-`src/zybo-btn/zybo_btn.h`):
+| Secure artifact | Contents |
+|---|---|
+| `sdcard.img` | Deployable SD image, after a successful complete build |
+| `boot.bin` | Signed FSBL and U-Boot containing the FIT public key |
+| `system.itb` | Signed Linux kernel, device tree and complete initial filesystem |
+| `recovery.itb` | Signed fallback; initially a duplicate of the factory image |
+| `u-boot-keyed.dtb` | Public control DT for host verification |
+| `secure-manifest.json` | Artifact hashes and build/provisioning notes |
+
+To supply a different known-good recovery release, set `ZYBO_RECOVERY_FIT`
+to a compatible signed FIT **outside the build output directory** before
+running the final build.
+
+## Boot and inspect
+
+1. Write the chosen `images/sdcard.img` to the microSD card. Confirm the target
+   disk carefully; flashing replaces its existing contents.
+2. Select SD boot using JP5 and connect the PROG/UART USB port.
+3. Open the serial console at **115200 baud, 8 data bits, no parity, 1 stop bit**.
+4. Power on and inspect the boot and health-check output.
+
+On the development image:
+
+```sh
+cat /run/zybo/health.txt
+test -f /run/zybo/ready && echo "Startup checks passed"
+tail -f /var/log/messages
+```
+
+`/run/zybo/ready` gates application startup. It is not continuous health
+attestation. A failed required check leaves the monitor stopped. An installed
+FPGA bitstream that fails programming also blocks the monitor.
+
+| Result | Meaning |
+|---|---|
+| `PASS` | The stated check passed, within its reported scope |
+| `FAIL` | A required check failed; application startup is blocked |
+| `SKIPPED` | An optional component or check is not applicable |
+| `NOT_TESTED` | Additional equipment, operator input or tests are needed |
+
+Interface detection does not prove physical button/LED behavior or complete
+Ethernet, USB, HDMI, audio or PMOD operation. The secure U-Boot DDR test covers
+a 1 MiB scratch region; the userspace RAM test covers its own 4 MiB allocation.
+
+## Application and driver interfaces
+
+- **BTN4:** cycle LD4 through heartbeat, on and off.
+- **BTN5:** log temperature, uptime, load, free memory and observed presses.
+- **Temperature alert:** fast LED blink above the configured threshold; clear
+  after temperature falls 5 C below the threshold.
+- **Configuration:** `/etc/default/zybo-monitor`, default `-i 60 -w 70`.
+- **Options:** `-i` accepts 1–86400 seconds; `-w` accepts finite values from
+  -40 to 125 C. `-v` also logs to stderr.
+
+The daemon uses `poll()`, `timerfd` and `signalfd`. It sleeps between events.
+Device disconnects disable button handling without a busy loop; fatal
+timer/signal descriptor failures return a nonzero exit status.
+
+The driver maintains a 32-event FIFO and emits this shared ABI:
 
 ```c
 struct zybo_btn_event {
-    __u64 timestamp_ns;   /* CLOCK_MONOTONIC */
-    __u32 button;         /* 0 = BTN4, 1 = BTN5 */
-    __u32 pressed;        /* 1 pressed, 0 released */
+    __u64 timestamp_ns; /* monotonic timestamp after debounce */
+    __u32 button;       /* 0: BTN4; 1: BTN5 */
+    __u32 pressed;      /* 1: pressed; 0: released */
 };
 ```
 
-sysfs, under `/sys/bus/platform/devices/buttons/`:
+Reads block until an event is available, or use `O_NONBLOCK`/`poll()`.
+Multiple readers share the queue; events are consumed, not broadcast.
+Platform-device sysfs attributes expose `debounce_ms` (1–1000), `presses` and
+`dropped`. The platform device is normally named `buttons`.
 
-```
-debounce_ms   rw   1..1000
-presses       ro   press count per button
-dropped       ro   events dropped because nobody was reading
-```
+For optional PL programming, include a Bootgen-converted binary at
+`/lib/firmware/zybo_top.bit.bin`. `S20fpga` uses the pinned Xilinx FPGA-manager
+interface and checks its `operating` state. In the secure profile, include
+the bitstream before signing the complete root filesystem.
 
-Quick check on the target:
+## Validation and CI
 
-```sh
-modprobe zybo_btn
-dmesg | tail -1            # zybo-btn buttons: 2 buttons, debounce 20 ms
-dd if=/dev/zybo_btn bs=16 count=1 2>/dev/null | hexdump -C   # blocks until a press
-cat /sys/bus/platform/devices/buttons/presses
-```
-
-Building it outside Buildroot against a configured kernel tree:
+Portable tests, from the repository root:
 
 ```sh
-make -C src/zybo-btn KDIR=/path/to/linux ARCH=arm CROSS_COMPILE=arm-linux-gnueabihf-
+python3 -m unittest discover -s tests -v
+mkdir -p output
+cc -std=c11 -Wall -Wextra -Werror -Isrc/zybo-health \
+    tests/health_test.c src/zybo-health/health.c -o output/health-test
+output/health-test
+cc -std=c11 -Wall -Wextra -Werror -Isrc/zybo-monitor \
+    tests/options_test.c src/zybo-monitor/options.c -o output/options-test
+output/options-test
 ```
 
-## zybo-monitor
-
-Started by `/etc/init.d/S90zybo-monitor` (which also does the `modprobe`).
-Options go in `/etc/default/zybo-monitor`.
-
-- BTN4: LD4 mode heartbeat -> on -> off
-- BTN5: writes a status line to syslog (temperature, uptime, load, free mem)
-- every `-i` seconds the XADC temperature is logged; above `-w` degrees LD4
-  switches to a fast blink until it is 5 degrees below the limit again
-
-It is a single poll() loop over the button device, a timerfd and a signalfd,
-so there are no signal handlers or threads. Logs go to syslog:
+On Linux, build the daemon and run integration tests with the pinned U-Boot tools:
 
 ```sh
-tail -f /var/log/messages | grep zybo-monitor
+make -C src/zybo-health
+make -C src/zybo-monitor
+export ZYBO_UBOOT_TOOLS=/absolute/path/to/u-boot-build/tools
+export ZYBO_MONITOR_BINARY="$PWD/src/zybo-monitor/zybo-monitor"
+ZYBO_REQUIRE_FIT_TESTS=1 python3 -m unittest discover -s tests -v
 ```
 
-Missing pieces (driver not loaded, no XADC) are logged and skipped, the rest
-keeps working. The daemon also builds on a PC (`make -C src/zybo-monitor`)
-which is handy for checking option parsing and error paths.
+FIT tests require `openssl`, `dtc` and `fdtget`. They use disposable keys and
+check valid signatures, wrong signers, unsigned images and modified payloads.
+Tests requiring unavailable Linux tools are explicitly skipped in portable
+runs; CI requires FIT tools and fails if they are missing.
 
-## Loading a bitstream (optional)
+The [CI workflow](.github/workflows/boot-checks.yml) builds the userspace programs
+and patched U-Boot, audits its resolved configuration and runs regression
+tests. It does not replace an end-to-end Buildroot build or tests on the board.
+See the [board acceptance checklist](docs/secure-boot.md#validation).
 
-The Zynq FPGA manager is enabled in the kernel. Convert the bitstream with
-bootgen and copy it to the target:
+## Troubleshooting
 
-```sh
-# system.bif:  all: { system.bit }
-bootgen -image system.bif -arch zynq -process_bitstream bin
-scp system.bit.bin root@zybo:/lib/firmware/zybo_top.bit.bin
-```
+| Symptom | Check |
+|---|---|
+| Signing stops before producing an image | Key/FSBL paths, private-key permissions and the reported configuration error |
+| `required FIT verification key missing` | Use the packaged `boot.bin`, not an earlier unkeyed U-Boot binary |
+| Both FITs rejected | Signing key, image integrity, `conf-1` layout and recovery compatibility |
+| Monitor reports `BLOCKED` | UART output, `/run/zybo/health.txt` and FPGA programming result |
+| `/dev/zybo_btn` absent | Module installation, device-tree GPIO node and `/dev` mount |
+| No interactive login in secure profile | Expected default; diagnostics are printed on UART |
 
-`/etc/init.d/S20fpga` programs it at boot. By hand:
+## Security boundaries and future work
 
-```sh
-echo 0 > /sys/class/fpga_manager/fpga0/flags
-echo zybo_top.bit.bin > /sys/class/fpga_manager/fpga0/firmware
-cat /sys/class/fpga_manager/fpga0/state      # operating
-```
+Authentication protects the initial software bytes; it does not encrypt them,
+prevent rollback to an older valid image, or guarantee safety after a runtime
+compromise. The initramfs is writable in RAM and changes disappear on reset.
+No eFUSEs are programmed by this repository's tools.
 
-The `firmware` attribute is a linux-xlnx addition, mainline kernels need a DT
-overlay for this instead.
+Future work includes measured service memory budgets and cgroups, ongoing
+service supervision, watchdog-assisted recovery, verified disk storage for
+larger applications, and peripheral-specific functional tests.
 
-## Notes
+## Licensing
 
-- `zybo-z7.dts` includes `zynq-zybo-z7.dts` from the kernel. For kernels 6.5+
-  the dts files moved, the include becomes `xilinx/zynq-zybo-z7.dts`.
-- There is no mdev/udev coldplug, so modules are loaded from the init scripts.
-- The Zybo Z7-10 and Z7-20 use the same DT and U-Boot config.
-
-## License
-
-Kernel module: GPL-2.0. Everything else: MIT.
+The button driver and U-Boot integration carry GPL-2.0-family SPDX identifiers;
+the event ABI header includes the Linux syscall exception. Userspace C carries
+MIT identifiers. Refer to individual files and upstream components for their
+applicable licenses.

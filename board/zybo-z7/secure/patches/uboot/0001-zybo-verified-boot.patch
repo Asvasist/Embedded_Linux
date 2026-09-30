@@ -1,0 +1,41 @@
+Subject: [PATCH] boot: add fixed verified boot policy for Zybo Z7-20
+
+The board header is installed by the BR2_EXTERNAL post-patch hook.
+
+--- a/common/main.c
++++ b/common/main.c
+@@ -17,6 +17,9 @@
+ #include <net.h>
+ #include <version_string.h>
+ #include <efi_loader.h>
++#ifdef CONFIG_ZYBO_VERIFIED_BOOT
++#include <zybo_verified_boot.h>
++#endif
+ 
+ static void run_preboot_environment_command(void)
+ {
+@@ -48,6 +51,11 @@
+ 
+ 	cli_init();
+ 
++	/* Initialize the parser, but never consult scripts or enter a prompt. */
++#ifdef CONFIG_ZYBO_VERIFIED_BOOT
++	zybo_verified_boot();
++#endif
++
+ 	if (IS_ENABLED(CONFIG_USE_PREBOOT))
+ 		run_preboot_environment_command();
+ 
+--- a/boot/Kconfig
++++ b/boot/Kconfig
+@@ -1529,3 +1529,10 @@
+ 	  will be created.
+ 
+ endmenu		# Booting
++
++config ZYBO_VERIFIED_BOOT
++	bool "Fixed authenticated Zybo Z7-20 SD boot"
++	depends on ARCH_ZYNQ && FIT_SIGNATURE && CMD_MMC && CMD_FAT && CMD_MEMTEST
++	help
++	  Only boot signed FIT configurations through the fixed board policy.
++	  Never fall through to an interactive command prompt.

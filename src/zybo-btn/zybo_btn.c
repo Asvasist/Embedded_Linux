@@ -104,6 +104,16 @@ static bool zybo_btn_pop(struct zybo_btn_priv *priv, struct zybo_btn_event *ev)
 	return ok;
 }
 
+static bool zybo_btn_pending(struct zybo_btn_priv *priv)
+{
+	bool pending;
+
+	spin_lock(&priv->lock);
+	pending = !kfifo_is_empty(&priv->fifo);
+	spin_unlock(&priv->lock);
+	return pending;
+}
+
 static ssize_t zybo_btn_read(struct file *file, char __user *buf,
 			     size_t count, loff_t *ppos)
 {
@@ -129,8 +139,7 @@ static ssize_t zybo_btn_read(struct file *file, char __user *buf,
 			return -EAGAIN;
 
 		/* another reader may beat us to it, hence the loop */
-		ret = wait_event_interruptible(priv->wq,
-					       !kfifo_is_empty(&priv->fifo));
+		ret = wait_event_interruptible(priv->wq, zybo_btn_pending(priv));
 		if (ret)
 			return ret;
 	}
@@ -143,7 +152,7 @@ static __poll_t zybo_btn_poll(struct file *file, poll_table *wait)
 
 	poll_wait(file, &priv->wq, wait);
 
-	return kfifo_is_empty(&priv->fifo) ? 0 : EPOLLIN | EPOLLRDNORM;
+	return zybo_btn_pending(priv) ? EPOLLIN | EPOLLRDNORM : 0;
 }
 
 static const struct file_operations zybo_btn_fops = {
@@ -262,14 +271,9 @@ static int zybo_btn_probe(struct platform_device *pdev)
 		INIT_DELAYED_WORK(&priv->btn[i].work, zybo_btn_work);
 	}
 
-	/*
-	 * Registered before the IRQs so that on teardown the IRQs are freed
-	 * first and cannot re-arm a work we already cancelled.
+	/* Acquire all GPIOs before registering work cancellation. On unwind:
+	 * free IRQs -> cancel work -> release GPIOs -> free private data.
 	 */
-	ret = devm_add_action_or_reset(dev, zybo_btn_cancel_work, priv);
-	if (ret)
-		return ret;
-
 	for (i = 0; i < priv->nbtn; i++) {
 		struct zybo_btn *btn = &priv->btn[i];
 
@@ -279,6 +283,17 @@ static int zybo_btn_probe(struct platform_device *pdev)
 					     "button %u: gpio\n", i);
 
 		btn->level = gpiod_get_value_cansleep(btn->gpiod);
+		if (btn->level < 0)
+			return dev_err_probe(dev, btn->level,
+					     "button %u: initial level\n", i);
+	}
+
+	ret = devm_add_action_or_reset(dev, zybo_btn_cancel_work, priv);
+	if (ret)
+		return ret;
+
+	for (i = 0; i < priv->nbtn; i++) {
+		struct zybo_btn *btn = &priv->btn[i];
 
 		irq = gpiod_to_irq(btn->gpiod);
 		if (irq < 0)
