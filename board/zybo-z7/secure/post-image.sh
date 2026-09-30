@@ -1,6 +1,6 @@
 #!/bin/sh
 set -eu
-BOARD_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+BOARD_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 # Do this before validating environment inputs so an unsuccessful rebuild
 # cannot leave yesterday's deployable SD image looking like a new release.
 "$HOST_DIR/bin/python3" "$BOARD_DIR/../../../tools/secure_boot.py" invalidate --images "$BINARIES_DIR"
