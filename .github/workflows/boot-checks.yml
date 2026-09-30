@@ -12,7 +12,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y gcc-arm-linux-gnueabihf bison flex libssl-dev \
-            libgnutls28-dev device-tree-compiler python3-setuptools python3-pyelftools \
+            libgnutls28-dev uuid-dev device-tree-compiler python3-setuptools python3-pyelftools \
             python3-dev swig shellcheck
       - name: Compile and test health checker
         run: |
