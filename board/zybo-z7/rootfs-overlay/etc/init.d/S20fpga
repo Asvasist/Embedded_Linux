@@ -9,18 +9,25 @@ MGR="/sys/class/fpga_manager/fpga0"
 
 start() {
 	[ -f "/lib/firmware/$BITSTREAM" ] || return 0
+	if [ -x /usr/sbin/zybo-health ] && [ ! -f /run/zybo/ready ]; then
+		echo 'PL programming BLOCKED (power-on checks failed)'
+		return 1
+	fi
 
 	printf 'Loading PL bitstream %s: ' "$BITSTREAM"
 	if [ ! -d "$MGR" ]; then
 		echo "FAIL (no fpga_manager)"
+		rm -f /run/zybo/ready
 		return 1
 	fi
 	# flags=0: full bitstream
-	echo 0 > "$MGR/flags"
-	if echo "$BITSTREAM" > "$MGR/firmware"; then
+	if echo 0 > "$MGR/flags" && echo "$BITSTREAM" > "$MGR/firmware" &&
+	   [ "$(cat "$MGR/state")" = operating ]; then
 		echo "OK ($(cat "$MGR/state"))"
 	else
 		echo "FAIL"
+		# An installed bitstream is treated as an application dependency.
+		rm -f /run/zybo/ready
 		return 1
 	fi
 }

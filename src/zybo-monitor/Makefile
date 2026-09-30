@@ -11,15 +11,17 @@ WARN   := -Wall -Wextra -Wshadow -Wformat=2
 INCS   := -I../zybo-btn
 
 PROG := zybo-monitor
-OBJS := main.o board.o
+OBJS := main.o board.o options.o
 
 $(PROG): $(OBJS)
 	$(CC) $(LDFLAGS) -o $@ $^
 
-%.o: %.c board.h
-	$(CC) $(CPPFLAGS) $(INCS) $(WARN) $(CFLAGS) -c -o $@ $<
+%.o: %.c board.h options.h
+	$(CC) $(CPPFLAGS) $(INCS) $(WARN) $(CFLAGS) -MMD -MP -c -o $@ $<
+
+-include $(OBJS:.o=.d)
 
 clean:
-	rm -f $(PROG) $(OBJS)
+	rm -f $(PROG) $(OBJS) $(OBJS:.o=.d)
 
 .PHONY: clean

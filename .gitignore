@@ -10,6 +10,16 @@ modules.order
 
 # userspace
 src/zybo-monitor/zybo-monitor
+src/zybo-monitor/*.d
 
 # buildroot out-of-tree output
 output/
+
+# Private signing material must never enter source control.
+*.key
+*.pem
+*.p12
+*.pfx
+__pycache__/
+src/zybo-health/zybo-health
+/Embedded_Linux/

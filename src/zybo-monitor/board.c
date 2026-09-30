@@ -3,8 +3,10 @@
  * sysfs helpers: LED class device and XADC (IIO) die temperature.
  */
 #include <dirent.h>
+#include <ctype.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -52,9 +54,12 @@ static int sysfs_read(const char *dir, const char *attr, char *buf, size_t size)
 		return -errno;
 
 	n = read(fd, buf, size - 1);
+	if (n < 0) {
+		int saved_errno = errno;
+		close(fd);
+		return -saved_errno;
+	}
 	close(fd);
-	if (n < 0)
-		return -errno;
 
 	buf[n] = '\0';
 	buf[strcspn(buf, "\n")] = '\0';
@@ -72,7 +77,11 @@ static int sysfs_read_double(const char *dir, const char *attr, double *val)
 
 	errno = 0;
 	*val = strtod(buf, &end);
-	if (errno || end == buf)
+	if (errno || end == buf || !isfinite(*val))
+		return -EINVAL;
+	while (isspace((unsigned char)*end))
+		end++;
+	if (*end)
 		return -EINVAL;
 	return 0;
 }
@@ -134,6 +143,7 @@ int xadc_init(void)
 	char dir[512], name[32];
 	DIR *d;
 
+	xadc_dir[0] = '\0';
 	d = opendir(IIO_SYSFS);
 	if (!d)
 		return -errno;
@@ -173,5 +183,5 @@ int xadc_read_temp(double *celsius)
 
 	/* IIO: (raw + offset) * scale gives milli degrees C */
 	*celsius = (raw + offset) * scale / 1000.0;
-	return 0;
+	return isfinite(*celsius) ? 0 : -ERANGE;
 }

@@ -1,0 +1,46 @@
+name: Boot checks
+on: [push, pull_request, workflow_dispatch]
+permissions:
+  contents: read
+jobs:
+  host-and-uboot:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-arm-linux-gnueabihf bison flex libssl-dev \
+            libgnutls28-dev uuid-dev device-tree-compiler python3-setuptools python3-pyelftools \
+            python3-dev swig shellcheck
+      - name: Compile and test health checker
+        run: |
+          mkdir -p output
+          make -C src/zybo-health
+          make -C src/zybo-monitor
+          cc -std=c11 -Wall -Wextra -Werror -Isrc/zybo-health \
+            tests/health_test.c src/zybo-health/health.c -o output/health-test
+          output/health-test
+          cc -std=c11 -Wall -Wextra -Werror -Isrc/zybo-monitor \
+            tests/options_test.c src/zybo-monitor/options.c -o output/options-test
+          output/options-test
+          shellcheck -e SC1090,SC1091 board/zybo-z7/secure/post-image.sh \
+            board/zybo-z7/post-image.sh package/zybo-health/S15zybo-health \
+            package/zybo-monitor/S90zybo-monitor board/zybo-z7/rootfs-overlay/etc/init.d/S20fpga
+      - name: Build the pinned secure U-Boot
+        run: |
+          git clone --depth 1 --branch xilinx-v2023.2 https://github.com/Xilinx/u-boot-xlnx.git output/u-boot
+          git -C output/u-boot apply "$GITHUB_WORKSPACE/board/zybo-z7/secure/patches/uboot/0001-zybo-verified-boot.patch"
+          cp board/zybo-z7/secure/zybo_verified_boot.h output/u-boot/include/
+          make -C output/u-boot CROSS_COMPILE=arm-linux-gnueabihf- xilinx_zynq_virt_defconfig
+          cd output/u-boot
+          scripts/kconfig/merge_config.sh -m .config "$GITHUB_WORKSPACE/board/zybo-z7/secure/uboot.fragment"
+          make CROSS_COMPILE=arm-linux-gnueabihf- olddefconfig
+          make -j2 CROSS_COMPILE=arm-linux-gnueabihf- DEVICE_TREE=zynq-zybo-z7
+      - name: Audit resolved config and test real signatures
+        run: |
+          python3 -c "from tools.secure_boot import audit_config; audit_config('output/u-boot/.config')"
+          ZYBO_REQUIRE_FIT_TESTS=1 ZYBO_UBOOT_TOOLS="$PWD/output/u-boot/tools" \
+            ZYBO_MONITOR_BINARY="$PWD/src/zybo-monitor/zybo-monitor" \
+            python3 -m unittest discover -s tests -v

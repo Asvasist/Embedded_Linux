@@ -1,0 +1,20 @@
+#!/bin/sh
+# rcS does not stop on a failed script: consumers must check the ready marker.
+case "$1" in
+    start)
+        mkdir -p /run/zybo
+        rm -f /run/zybo/ready
+        modprobe -q zybo_btn
+        if /usr/sbin/zybo-health > /run/zybo/health.txt 2>&1; then
+            cat /run/zybo/health.txt
+            touch /run/zybo/ready
+        else
+            cat /run/zybo/health.txt
+            echo 'Zybo startup FAILED: applications remain stopped; use UART diagnostics.'
+            exit 1
+        fi
+        ;;
+    stop) rm -f /run/zybo/ready ;;
+    restart) "$0" stop && "$0" start ;;
+    *) echo "Usage: $0 {start|stop|restart}"; exit 1 ;;
+esac

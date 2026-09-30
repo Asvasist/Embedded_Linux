@@ -10,12 +10,24 @@ ZYBO_MONITOR_ARGS=""
 
 start() {
 	printf 'Starting %s: ' "$DAEMON"
+	if [ -x /usr/sbin/zybo-health ] && [ ! -f /run/zybo/ready ]; then
+		echo 'BLOCKED (power-on checks failed; see /run/zybo/health.txt)'
+		return 1
+	fi
 	# no udev/mdev coldplug here, load the button driver by hand
 	modprobe -q zybo_btn
 	# shellcheck disable=SC2086 # word splitting is wanted
 	start-stop-daemon -S -q -b -m -p "$PIDFILE" -x "/usr/sbin/$DAEMON" \
 		-- $ZYBO_MONITOR_ARGS
 	status=$?
+	# Background launch alone is not readiness: require the process to survive.
+	if [ "$status" -eq 0 ]; then
+		sleep 1
+		if [ ! -r "$PIDFILE" ] || ! kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then
+			status=1
+			rm -f "$PIDFILE"
+		fi
+	fi
 	if [ "$status" -eq 0 ]; then
 		echo "OK"
 	else
@@ -26,7 +38,7 @@ start() {
 
 stop() {
 	printf 'Stopping %s: ' "$DAEMON"
-	start-stop-daemon -K -q -p "$PIDFILE"
+	start-stop-daemon -K -q -p "$PIDFILE" -x "/usr/sbin/$DAEMON"
 	status=$?
 	if [ "$status" -eq 0 ]; then
 		rm -f "$PIDFILE"
